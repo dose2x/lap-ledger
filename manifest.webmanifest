@@ -1,0 +1,10 @@
+{
+  "name": "Lap Ledger",
+  "short_name": "Lap Ledger",
+  "description": "Lap times and setups for every iRacing car and track combo.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#ECEFF2",
+  "theme_color": "#111A24",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

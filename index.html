@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Lap Ledger</title>
+<meta name="description" content="Look up your lap times and setups for any iRacing car and track combo.">
+<meta name="theme-color" content="#111A24">
+<script>
+  (function () {
+    try {
+      var t = localStorage.getItem('ledger.theme');
+      if (t !== 'light' && t !== 'dark') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      document.documentElement.dataset.theme = t;
+    } catch (e) { document.documentElement.dataset.theme = 'light'; }
+  })();
+</script>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800;900&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#/" aria-label="Lap Ledger home">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <span class="brand-name">Lap Ledger</span>
+  </a>
+  <div class="top-controls">
+    <button type="button" class="switch" id="theme" role="switch" aria-checked="false" aria-label="Dark mode">
+      <span class="knob" aria-hidden="true"></span>
+    </button>
+    <div class="seg" role="group" aria-label="Whose laps">
+      <button type="button" data-mode="me" aria-pressed="true">Mine</button>
+      <button type="button" data-mode="team" aria-pressed="false">Team</button>
+    </div>
+  </div>
+</header>
+<div id="banner" class="banner" hidden></div>
+<main id="app" tabindex="-1"></main>
+<script src="config.js"></script>
+<script src="sample.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
