@@ -233,7 +233,7 @@
 
   function setupHtml(combo, lap, best) {
     const setup = combo.setups[lap.setupId];
-    if (!setup) return '<div class="empty"><strong>No setup on this lap</strong>Garage61 did not return a setup file for it.</div>';
+    if (!setup) return '<div class="empty"><strong>No setup stored for this lap</strong>The Garage61 public API does not share setups yet, so setups have to be added another way.</div>';
     const ref = combo.setups[best.setupId];
     const same = lap.setupId === best.setupId;
     const refMap = {};
