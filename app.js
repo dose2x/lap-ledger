@@ -122,10 +122,19 @@
     if (!key) key = (prompt('Enter the edit key to save changes') || '').trim();
     return key;
   }
-  async function refreshCombos() {
-    // no-store: the API answer is cacheable for a minute, and the file just added or deleted must show up now
-    const r = await fetch(API + '/api/combos', { headers: { accept: 'application/json' }, cache: 'no-store' });
-    if (r.ok) DATA.combos = (await r.json()).combos;
+  // Keeps the setup form (chosen file, typed note, checkbox) when the page re-renders, e.g. after tapping a lap.
+  function captureSetupForm(comboId) {
+    const f = document.getElementById('sf-form');
+    if (!f || f.dataset.combo !== comboId) return null;
+    const file = f.file.files[0], note = f.note.value, attach = f.attach.checked;
+    return file || note || !attach ? { file, note, attach } : null;
+  }
+  function restoreSetupForm(kept) {
+    const f = kept && document.getElementById('sf-form');
+    if (!f) return;
+    if (kept.file) { const dt = new DataTransfer(); dt.items.add(kept.file); f.file.files = dt.files; }
+    f.note.value = kept.note;
+    f.attach.checked = kept.attach;
   }
 
   function filesHtml(combo, sel) {
@@ -146,7 +155,7 @@
     return `<div class="sfiles">
       <h3 class="sf-h">Setup files</h3>
       ${rows ? `<ul class="sf-list">${rows}</ul>` : '<p class="sf-empty">No setup files yet. Add the .sto file you used here, then download it later to load it back into iRacing.</p>'}
-      <form id="sf-form" class="sf-form">
+      <form id="sf-form" class="sf-form" data-combo="${esc(combo.id)}">
         <label class="sf-field">Setup file (.sto)<input type="file" name="file" accept=".sto" required></label>
         <label class="sf-field">Key values or what changed<textarea name="note" rows="2" maxlength="500" placeholder="Example: rear wing 8, front ARB 3, brake bias 54.5"></textarea></label>
         <label class="sf-check"><input type="checkbox" name="attach" checked> Used on the selected lap, <b>${fmt(sel.ms)}</b></label>
@@ -161,15 +170,16 @@
     if (!file) return say('Choose a .sto file first.');
     if (!file.name.toLowerCase().endsWith('.sto')) return say('Only iRacing setup files (.sto) can be added.');
     if (file.size > MAX_SETUP_BYTES) return say('That file is over 512 KB.');
+    const comboId = state.comboId;              // read once: the user may navigate while the upload is in flight
     const lapId = form.attach.checked ? state.sel : '';
     const note = form.note.value.trim();
     say('Adding…');
     try {
       if (DATA.isSample) {
-        const list = localFiles(state.comboId);
+        const list = localFiles(comboId);
         if (list.reduce((n, f) => n + f.size, 0) + file.size > 150 * 1024) return say('Sample mode keeps files on this device only, up to about 150 KB.');
-        list.push({ id: 'local-' + Date.now(), lapId, name: file.name, size: file.size, note, at: Date.now(), b64: await fileToB64(file) });
-        if (!store.set('ledger.files.' + state.comboId, JSON.stringify(list))) return say('Could not save. Browser storage is blocked.');
+        list.push({ id: 'local-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7), lapId, name: file.name, size: file.size, note, at: Date.now(), b64: await fileToB64(file) });
+        if (!store.set('ledger.files.' + comboId, JSON.stringify(list))) return say('Could not save. Browser storage is blocked.');
       } else {
         const key = editKey();
         if (!key) return say('Not added. An edit key is needed.');
@@ -177,21 +187,26 @@
         body.append('file', file);
         body.append('lap', lapId);
         body.append('note', note);
-        const res = await fetch(API + '/api/combos/' + state.comboId + '/setup-files', { method: 'POST', headers: { 'x-edit-key': key }, body });
+        const res = await fetch(API + '/api/combos/' + comboId + '/setup-files', { method: 'POST', headers: { 'x-edit-key': key }, body });
         if (res.status === 401) { store.set('ledger.editkey', ''); return say('Not added. That edit key was wrong.'); }
         if (!res.ok) return say((await res.json().catch(() => ({}))).error || 'Could not add the file. Try again.');
         store.set('ledger.editkey', key);
-        await refreshCombos();
+        // The server's reply describes the stored file, so the list can be updated without another request.
+        const added = await res.json();
+        const combo = DATA.combos.find(c => c.id === comboId);
+        if (combo) combo.files = [added, ...(combo.files || [])];
       }
+      form.reset();
       route();
     } catch (e) { say('Could not add the file. Check your connection and try again.'); }
   }
 
   async function deleteSetupFile(id) {
     if (!confirm('Delete this setup file?')) return;
+    const comboId = state.comboId;
     try {
       if (DATA.isSample) {
-        store.set('ledger.files.' + state.comboId, JSON.stringify(localFiles(state.comboId).filter(f => f.id !== id)));
+        store.set('ledger.files.' + comboId, JSON.stringify(localFiles(comboId).filter(f => f.id !== id)));
       } else {
         const key = editKey();
         if (!key) return;
@@ -199,7 +214,8 @@
         if (res.status === 401) { store.set('ledger.editkey', ''); return alert('That edit key was wrong.'); }
         if (!res.ok) throw new Error(res.status);
         store.set('ledger.editkey', key);
-        await refreshCombos();
+        const combo = DATA.combos.find(c => c.id === comboId);
+        if (combo) combo.files = (combo.files || []).filter(f => f.id !== id);
       }
       route();
     } catch (e) { alert('Could not delete the file. Check your connection and try again.'); }
@@ -271,6 +287,7 @@
 
     const multi = state.drivers.size > 1;
     const gainMs = first && !multi ? first.ms - best.ms : null;
+    const keptForm = captureSetupForm(id);
 
     $app.innerHTML = `
       <a class="back" href="#/">← All combos</a>
@@ -330,6 +347,7 @@
         <div class="note-foot"><span id="note-state">${DATA.isSample ? 'Saved on this device' : 'Shared with your team'}</span><button class="btn ghost" type="button" id="share">Copy link to this combo</button></div>
       </section>`;
 
+    restoreSetupForm(keptForm);
     chartCtx = { laps, status, selId: sel.id, multi };
     drawChart(document.getElementById('chart'), laps, status, sel.id, multi);
   }
