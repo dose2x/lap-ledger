@@ -182,3 +182,25 @@ textarea:focus{border-color:var(--ink);outline:none}
 #chart .pt.sel{stroke:var(--ink);stroke-width:2}
 #chart .trend{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
 @media (prefers-reduced-motion:reduce){.switch .knob{transition:none}}
+
+/* setup files */
+.sfiles{margin-top:22px;padding-top:16px;border-top:2px solid var(--line)}
+.sf-h{margin:0 0 8px;font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-2)}
+.sf-list{list-style:none;margin:0 0 14px;padding:0;display:grid;gap:8px}
+.sfile{display:grid;grid-template-columns:1fr auto;gap:4px 12px;align-items:start;padding:10px 12px;border:1px solid var(--line);border-radius:8px}
+.sfile.here{border-color:var(--pb);box-shadow:inset 3px 0 0 var(--pb)}
+.sf-main{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;min-width:0}
+.sf-name{font:600 15px/1.2 var(--mono);color:var(--ink);word-break:break-all}
+.sf-meta{flex-basis:100%;font-size:12.5px;color:var(--ink-2)}
+.sf-note{grid-column:1/-1;margin:2px 0 0;font-size:14.5px;white-space:pre-wrap;overflow-wrap:anywhere}
+.sfile .btn{grid-row:1;grid-column:2}
+.btn.sm{padding:5px 12px;font-size:13px}
+.sf-empty{margin:0 0 14px;font-size:14.5px;color:var(--ink-2)}
+.sf-form{display:grid;gap:10px}
+.sf-field{display:grid;gap:4px;font-size:13px;font-weight:600;color:var(--ink-2)}
+.sf-field input[type=file]{font:400 14px var(--body);color:var(--ink);padding:8px;border:1.5px dashed var(--line);border-radius:8px;background:var(--field);width:100%}
+.sf-field textarea{min-height:0;font-size:15px}
+.sf-check{display:flex;gap:8px;align-items:center;font-size:14px}
+.sf-check input{width:18px;height:18px;accent-color:var(--best)}
+.sf-actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+#sf-state{font-size:13px;color:var(--ink-2)}

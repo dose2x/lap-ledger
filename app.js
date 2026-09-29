@@ -103,6 +103,108 @@
     return window.SAMPLE;
   }
 
+  /* ---------- setup files (.sto) ---------- */
+  // iRacing's .sto format is not readable outside iRacing, so a setup is kept as the file itself (to download and
+  // load back into the sim) plus a short note of the key values. Sample mode keeps files on this device only.
+  const MAX_SETUP_BYTES = 512 * 1024;
+  const localFiles = id => { try { return JSON.parse(store.get('ledger.files.' + id) || '[]'); } catch (e) { return []; } };
+  const filesOf = combo => (DATA.isSample ? localFiles(combo.id) : combo.files || []);
+  const kb = n => (n < 1024 ? n + ' B' : (n / 1024).toFixed(n < 10240 ? 1 : 0) + ' KB');
+  const fileHref = f => (DATA.isSample ? 'data:application/octet-stream;base64,' + f.b64 : API + '/api/setup-files/' + f.id);
+  const fileToB64 = f => new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(',')[1]);
+    r.onerror = reject;
+    r.readAsDataURL(f);
+  });
+  function editKey() {
+    let key = store.get('ledger.editkey');
+    if (!key) key = (prompt('Enter the edit key to save changes') || '').trim();
+    return key;
+  }
+  async function refreshCombos() {
+    // no-store: the API answer is cacheable for a minute, and the file just added or deleted must show up now
+    const r = await fetch(API + '/api/combos', { headers: { accept: 'application/json' }, cache: 'no-store' });
+    if (r.ok) DATA.combos = (await r.json()).combos;
+  }
+
+  function filesHtml(combo, sel) {
+    const files = filesOf(combo).slice().sort((a, b) => (b.lapId === sel.id) - (a.lapId === sel.id) || b.at - a.at);
+    const rows = files.map(f => {
+      const lap = f.lapId && combo.laps.find(l => l.id === f.lapId);
+      const here = f.lapId === sel.id;
+      return `<li class="sfile${here ? ' here' : ''}">
+        <div class="sf-main">
+          <a class="sf-name" href="${esc(fileHref(f))}" download="${esc(f.name)}">${esc(f.name)}</a>
+          ${here ? '<span class="tag pb">This lap</span>' : ''}
+          <span class="sf-meta">${kb(f.size)} · added ${dateLong(f.at)}${lap ? ` · used on ${fmt(lap.ms)} (${dateStr(lap.at)})` : ''}</span>
+        </div>
+        ${f.note ? `<p class="sf-note">${esc(f.note)}</p>` : ''}
+        <button class="btn ghost sm" type="button" data-del-file="${esc(f.id)}">Delete</button>
+      </li>`;
+    }).join('');
+    return `<div class="sfiles">
+      <h3 class="sf-h">Setup files</h3>
+      ${rows ? `<ul class="sf-list">${rows}</ul>` : '<p class="sf-empty">No setup files yet. Add the .sto file you used here, then download it later to load it back into iRacing.</p>'}
+      <form id="sf-form" class="sf-form">
+        <label class="sf-field">Setup file (.sto)<input type="file" name="file" accept=".sto" required></label>
+        <label class="sf-field">Key values or what changed<textarea name="note" rows="2" maxlength="500" placeholder="Example: rear wing 8, front ARB 3, brake bias 54.5"></textarea></label>
+        <label class="sf-check"><input type="checkbox" name="attach" checked> Used on the selected lap, <b>${fmt(sel.ms)}</b></label>
+        <div class="sf-actions"><button class="btn" type="submit">Add setup file</button><span id="sf-state" role="status"></span></div>
+      </form>
+    </div>`;
+  }
+
+  async function addSetupFile(form) {
+    const say = m => { const s = document.getElementById('sf-state'); if (s) s.textContent = m; };
+    const file = form.file.files[0];
+    if (!file) return say('Choose a .sto file first.');
+    if (!file.name.toLowerCase().endsWith('.sto')) return say('Only iRacing setup files (.sto) can be added.');
+    if (file.size > MAX_SETUP_BYTES) return say('That file is over 512 KB.');
+    const lapId = form.attach.checked ? state.sel : '';
+    const note = form.note.value.trim();
+    say('Adding…');
+    try {
+      if (DATA.isSample) {
+        const list = localFiles(state.comboId);
+        if (list.reduce((n, f) => n + f.size, 0) + file.size > 150 * 1024) return say('Sample mode keeps files on this device only, up to about 150 KB.');
+        list.push({ id: 'local-' + Date.now(), lapId, name: file.name, size: file.size, note, at: Date.now(), b64: await fileToB64(file) });
+        if (!store.set('ledger.files.' + state.comboId, JSON.stringify(list))) return say('Could not save. Browser storage is blocked.');
+      } else {
+        const key = editKey();
+        if (!key) return say('Not added. An edit key is needed.');
+        const body = new FormData();
+        body.append('file', file);
+        body.append('lap', lapId);
+        body.append('note', note);
+        const res = await fetch(API + '/api/combos/' + state.comboId + '/setup-files', { method: 'POST', headers: { 'x-edit-key': key }, body });
+        if (res.status === 401) { store.set('ledger.editkey', ''); return say('Not added. That edit key was wrong.'); }
+        if (!res.ok) return say((await res.json().catch(() => ({}))).error || 'Could not add the file. Try again.');
+        store.set('ledger.editkey', key);
+        await refreshCombos();
+      }
+      route();
+    } catch (e) { say('Could not add the file. Check your connection and try again.'); }
+  }
+
+  async function deleteSetupFile(id) {
+    if (!confirm('Delete this setup file?')) return;
+    try {
+      if (DATA.isSample) {
+        store.set('ledger.files.' + state.comboId, JSON.stringify(localFiles(state.comboId).filter(f => f.id !== id)));
+      } else {
+        const key = editKey();
+        if (!key) return;
+        const res = await fetch(API + '/api/setup-files/' + id, { method: 'DELETE', headers: { 'x-edit-key': key } });
+        if (res.status === 401) { store.set('ledger.editkey', ''); return alert('That edit key was wrong.'); }
+        if (!res.ok) throw new Error(res.status);
+        store.set('ledger.editkey', key);
+        await refreshCombos();
+      }
+      route();
+    } catch (e) { alert('Could not delete the file. Check your connection and try again.'); }
+  }
+
   /* ---------- home ---------- */
   function renderHome() {
     const q = state.query.trim().toLowerCase();
@@ -218,6 +320,7 @@
         <section class="card" aria-labelledby="h-set">
           <h2 id="h-set">Setup</h2>
           ${setupHtml(combo, sel, best)}
+          ${filesHtml(combo, sel)}
         </section>
       </div>
 
@@ -233,7 +336,7 @@
 
   function setupHtml(combo, lap, best) {
     const setup = combo.setups[lap.setupId];
-    if (!setup) return '<div class="empty"><strong>No setup stored for this lap</strong>The Garage61 public API does not share setups yet, so setups have to be added another way.</div>';
+    if (!setup) return '<div class="empty"><strong>No setup values stored for this lap</strong>Garage61 does not share setups with other apps yet. Add the .sto file below, and note the key values.</div>';
     const ref = combo.setups[best.setupId];
     const same = lap.setupId === best.setupId;
     const refMap = {};
@@ -352,6 +455,8 @@
       if (state.drivers.has(d)) { if (state.drivers.size > 1) state.drivers.delete(d); } else state.drivers.add(d);
       return route();
     }
+    const del = e.target.closest('[data-del-file]');
+    if (del) return deleteSetupFile(del.dataset.delFile);
     const lap = e.target.closest('[data-lap]');
     if (lap) return selectLap(lap.dataset.lap);
     if (e.target.id === 'share') {
@@ -364,6 +469,11 @@
     if ((e.key === 'Enter' || e.key === ' ') && e.target.classList && e.target.classList.contains("pt")) {
       e.preventDefault(); selectLap(e.target.dataset.lap);
     }
+  });
+  document.addEventListener('submit', e => {
+    if (e.target.id !== 'sf-form') return;
+    e.preventDefault();
+    addSetupFile(e.target);
   });
   document.addEventListener('input', e => {
     if (e.target.id !== 'notes') return;
