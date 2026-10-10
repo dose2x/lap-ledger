@@ -79,11 +79,12 @@
   async function sendNote(id, text) {
     const $s = document.getElementById('note-state');
     const say = msg => { if ($s) $s.textContent = msg; };
-    let key = store.get('ledger.editkey');
-    if (!key) { key = (prompt('Enter the edit key to save notes') || '').trim(); if (!key) { say('Not saved. An edit key is needed.'); return; } }
+    const key = editKey();
+    if (!key) { say('Not saved. An edit key is needed.'); return; }
     try {
       const res = await fetch(API + '/api/notes/' + id, { method: 'PUT', keepalive: true, headers: { 'content-type': 'application/json', 'x-edit-key': key }, body: JSON.stringify({ body: text }) });
       if (res.status === 401) { store.set('ledger.editkey', ''); say('Not saved. That edit key was wrong.'); return; }
+      if (res.status === 429) { say(await lockoutText(res)); return; }
       if (!res.ok) throw new Error(res.status);
       store.set('ledger.editkey', key);
       say('Saved. Shared with your team');
@@ -117,6 +118,8 @@
     r.onerror = reject;
     r.readAsDataURL(f);
   });
+  // After too many wrong keys the Worker answers 429 with a message saying how long to wait.
+  const lockoutText = async res => (await res.json().catch(() => ({}))).error || 'Too many wrong keys. Try again in a few minutes.';
   function editKey() {
     let key = store.get('ledger.editkey');
     if (!key) key = (prompt('Enter the edit key to save changes') || '').trim();
@@ -189,6 +192,7 @@
         body.append('note', note);
         const res = await fetch(API + '/api/combos/' + comboId + '/setup-files', { method: 'POST', headers: { 'x-edit-key': key }, body });
         if (res.status === 401) { store.set('ledger.editkey', ''); return say('Not added. That edit key was wrong.'); }
+        if (res.status === 429) return say(await lockoutText(res));
         if (!res.ok) return say((await res.json().catch(() => ({}))).error || 'Could not add the file. Try again.');
         store.set('ledger.editkey', key);
         // The server's reply describes the stored file, so the list can be updated without another request.
@@ -212,6 +216,7 @@
         if (!key) return;
         const res = await fetch(API + '/api/setup-files/' + id, { method: 'DELETE', headers: { 'x-edit-key': key } });
         if (res.status === 401) { store.set('ledger.editkey', ''); return alert('That edit key was wrong.'); }
+        if (res.status === 429) return alert(await lockoutText(res));
         if (!res.ok) throw new Error(res.status);
         store.set('ledger.editkey', key);
         const combo = DATA.combos.find(c => c.id === comboId);
@@ -224,7 +229,7 @@
   /* ---------- import laps (Garage61 CSV export) ---------- */
   // Garage61's export lists the laps but not which car or track they belong to, so the user picks both. The Worker
   // stores them as imported laps and the Garage61 sync replaces them once the API returns the same laps.
-  const imp = { parsed: null, catalog: null, maps: null };
+  const imp = { parsed: null, catalog: null, maps: null, items: null, sel: { cars: null, tracks: null }, active: -1, reading: 0 };
 
   function parseCsv(text) {
     const rows = [];
@@ -251,22 +256,42 @@
     if (missing.length) return { error: 'This does not look like a Garage61 lap export. Missing columns: ' + missing.join(', ') + '.' };
     const iT = col('lap time'), iAt = col('started at'), iDr = col('driver'), iClean = col('clean'), iAir = col('air temperature'), iTrack = col('track temp');
     const laps = [];
-    let unclean = 0, unreadable = 0;
+    let unclean = 0, badTime = 0, badDate = 0, noDriver = 0;
     for (const r of table.slice(1)) {
-      const t = Number(r[iT]), driver = (r[iDr] || '').trim(), at = (r[iAt] || '').trim();
-      if (!(t > 20 && t < 3600) || !Number.isFinite(Date.parse(at)) || !driver) { unreadable++; continue; }
+      const t = parseLapTime(r[iT]), driver = (r[iDr] || '').trim(), at = (r[iAt] || '').trim();
+      if (!(t > 5 && t < 3600)) { badTime++; continue; }
+      if (!Number.isFinite(Date.parse(at))) { badDate++; continue; }
+      if (!driver) { noDriver++; continue; }
       if (iClean >= 0 && !['1', 'true'].includes((r[iClean] || '').trim().toLowerCase())) { unclean++; continue; }
       laps.push({ t, at, driver, air: iAir >= 0 ? r[iAir] : null, track: iTrack >= 0 ? r[iTrack] : null });
     }
-    return { laps, unclean, unreadable, drivers: [...new Set(laps.map(l => l.driver))], best: laps.length ? Math.min(...laps.map(l => l.t)) : null };
+    return {
+      laps, unclean, badTime, badDate, noDriver, unreadable: badTime + badDate + noDriver,
+      drivers: [...new Set(laps.map(l => l.driver))], best: laps.length ? Math.min(...laps.map(l => l.t)) : null
+    };
+  }
+
+  // Garage61 writes lap times in seconds ("90.532"); also accepts minutes and seconds ("1:30.532").
+  function parseLapTime(text) {
+    const s = String(text == null ? '' : text).trim();
+    const m = /^(\d+):(\d{1,2}(?:\.\d+)?)$/.exec(s);
+    return m ? Number(m[1]) * 60 + Number(m[2]) : (s === '' ? NaN : Number(s));
   }
 
   function summaryHtml(p) {
     if (!p) return '';
     if (p.error) return `<p class="imp-bad">${esc(p.error)}</p>`;
-    if (!p.laps.length) return '<p class="imp-bad">This file has no clean laps to import.</p>';
-    const left = p.unclean + p.unreadable;
-    return `<p><b>${p.laps.length}</b> clean ${p.laps.length === 1 ? 'lap' : 'laps'} will be imported${left ? `. ${left} unclean or unreadable ${left === 1 ? 'row is' : 'rows are'} left out` : ''}.
+    const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+    const left = [];
+    if (p.unclean) left.push(plural(p.unclean, 'unclean lap', 'unclean laps'));
+    if (p.badTime) left.push(plural(p.badTime, 'row with a lap time that could not be read', 'rows with lap times that could not be read'));
+    if (p.badDate) left.push(plural(p.badDate, 'row with a start time that could not be read', 'rows with start times that could not be read'));
+    if (p.noDriver) left.push(plural(p.noDriver, 'row with no driver', 'rows with no driver'));
+    const leftText = left.length ? ` Left out: ${left.join(', ')}.` : '';
+    if (!p.laps.length) {
+      return `<p class="imp-bad">Nothing in this file can be imported.${leftText}${p.badTime || p.badDate ? ' If the times look normal in the file, the export format may have changed.' : ''}</p>`;
+    }
+    return `<p><b>${plural(p.laps.length, 'clean lap', 'clean laps')}</b> will be imported.${leftText}
       Driver${p.drivers.length === 1 ? '' : 's'}: ${p.drivers.map(esc).join(', ')}. Best lap <b class="mono">${fmt(Math.round(p.best * 1000))}</b>.</p>`;
   }
 
@@ -281,6 +306,7 @@
 
   async function renderImport() {
     imp.parsed = null;
+    imp.reading++;                                        // a file still being read belongs to the old page
     const head = '<a class="back" href="#/">← All combos</a><h1 class="combo">Import laps</h1><p class="combo-track">From a Garage61 export file</p>';
     if (!DATA.apiOk) {
       $app.innerHTML = head + '<div class="empty"><strong>Importing needs the live app</strong>This copy is not connected to your Lap Ledger server, so there is nowhere to save the laps.</div>';
@@ -319,6 +345,9 @@
     imp.items = { cars: build(imp.maps.cars, () => ''), tracks: build(imp.maps.tracks, trackAlias) };
     imp.sel = { cars: null, tracks: null };
     imp.active = -1;
+    // The user may have started typing while the list loaded; show their suggestions now.
+    const typing = document.activeElement;
+    if (typing && typing.dataset && typing.dataset.pick && typing.value) showPicks(typing);
   }
 
   /* Car and track search: ignores accents and capitals, matches words in any order, knows common nicknames. */
@@ -343,6 +372,12 @@
   function showPicks(input) {
     const kind = input.dataset.pick;
     const list = document.getElementById(input.getAttribute('aria-controls'));
+    if (!imp.items) {                                     // the car and track list is still loading
+      list.innerHTML = '<li class="pick-more">Loading the list…</li>';
+      list.hidden = false;
+      input.setAttribute('aria-expanded', 'true');
+      return;
+    }
     const all = pickMatches(kind, input.value), shown = all.slice(0, PICK_MAX);
     imp.active = shown.length ? 0 : -1;
     list.innerHTML = shown.map((it, i) => `<li role="option" id="${list.id}-${i}" aria-selected="${i === 0}"><button type="button" tabindex="-1" data-pick-id="${it.id}" data-pick-kind="${kind}" data-pick-label="${esc(it.label)}">${esc(it.label)}</button></li>`).join('')
@@ -373,9 +408,15 @@
 
   async function onImportFile(file) {
     const box = document.getElementById('imp-summary');
+    const ticket = ++imp.reading;                         // only the newest file chosen may set the result
     if (!file) { imp.parsed = null; if (box) box.innerHTML = ''; return; }
-    if (file.size > 2 * 1024 * 1024) imp.parsed = { error: 'That file is over 2 MB, which is too large for a lap export.' };
-    else imp.parsed = parseExport(await file.text());
+    imp.parsed = null;
+    if (box) box.innerHTML = '';
+    const parsed = file.size > 2 * 1024 * 1024
+      ? { error: 'That file is over 2 MB, which is too large for a lap export.' }
+      : parseExport(await file.text());
+    if (ticket !== imp.reading) return;
+    imp.parsed = parsed;
     if (box) box.innerHTML = summaryHtml(imp.parsed);
   }
 
@@ -403,6 +444,7 @@
           body: JSON.stringify({ car, track, laps: p.laps.slice(i, i + 400) })
         });
         if (res.status === 401) { store.set('ledger.editkey', ''); return say('Not imported. That edit key was wrong.'); }
+        if (res.status === 429) return say(await lockoutText(res));
         const out = await res.json().catch(() => ({}));
         if (!res.ok) return say((out.error || 'Could not import. Try again.') + (added ? ` ${added} laps were added before this.` : ''));
         added += out.added; skipped += out.skipped;
@@ -416,6 +458,28 @@
     } catch (e) {
       say(`Could not finish. ${added ? added + ' laps were added; reload the app to see them.' : 'Check your connection and try again.'}`);
     } finally { go.disabled = false; }
+  }
+
+  // Undo for an import: removes the laps that came from export files for this car and track.
+  async function removeImported() {
+    const comboId = state.comboId;
+    const combo = DATA.combos.find(c => c.id === comboId);
+    const say = m => { const s = document.getElementById('imp-undo-state'); if (s) s.textContent = m; };
+    if (!combo || !confirm(`Remove the ${combo.imported} imported laps for ${combo.car} at ${combo.track}? Laps that came from Garage61 itself are not touched.`)) return;
+    const key = editKey();
+    if (!key) return say('Not removed. An edit key is needed.');
+    say('Removing…');
+    try {
+      const res = await fetch(API + '/api/combos/' + comboId + '/imported-laps', { method: 'DELETE', headers: { 'x-edit-key': key } });
+      if (res.status === 401) { store.set('ledger.editkey', ''); return say('Not removed. That edit key was wrong.'); }
+      if (res.status === 429) return say(await lockoutText(res));
+      if (!res.ok) throw new Error(res.status);
+      store.set('ledger.editkey', key);
+      const r = await fetch(API + '/api/combos', { headers: { accept: 'application/json' }, cache: 'no-store' });
+      if (!r.ok) throw new Error(r.status);
+      await adopt({ ...(await r.json()), apiOk: true });
+      if (DATA.combos.some(c => c.id === comboId)) route(); else location.hash = '#/';
+    } catch (e) { say('Could not remove the laps. Check your connection and try again.'); }
   }
 
   /* ---------- home ---------- */
@@ -545,7 +609,14 @@
         <h2 id="h-notes">Notes</h2>
         <textarea id="notes" aria-label="Notes for this car and track" placeholder="What works here? Example: understeers in T3, try a softer front bar.">${esc(getNote(combo.id))}</textarea>
         <div class="note-foot"><span id="note-state">${DATA.isSample ? 'Saved on this device' : 'Shared with your team'}</span><button class="btn ghost" type="button" id="share">Copy link to this combo</button></div>
-      </section>`;
+      </section>
+      ${!DATA.isSample && combo.imported ? `
+      <section class="card" aria-labelledby="h-imp">
+        <h2 id="h-imp">Imported laps</h2>
+        <p class="imp-note"><b>${combo.imported}</b> of these laps came from a Garage61 export file. When Garage61 lets the app read laps directly, the sync replaces them with the real ones.
+          If you picked the wrong car or track, remove them and import the file again.</p>
+        <div class="sf-actions"><button class="btn ghost" type="button" data-del-imported>Remove imported laps</button><span id="imp-undo-state" role="status"></span></div>
+      </section>` : ''}`;
 
     restoreSetupForm(keptForm);
     chartCtx = { laps, status, selId: sel.id, multi };
@@ -675,6 +746,7 @@
     }
     const pick = e.target.closest('[data-pick-id]');
     if (pick) return choosePick(pick.dataset.pickKind, Number(pick.dataset.pickId), pick.dataset.pickLabel);
+    if (e.target.closest('[data-del-imported]')) return removeImported();
     const del = e.target.closest('[data-del-file]');
     if (del) return deleteSetupFile(del.dataset.delFile);
     const lap = e.target.closest('[data-lap]');
