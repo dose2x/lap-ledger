@@ -292,28 +292,83 @@
           <p class="hint">In Garage61, export the laps for one car and track as a CSV file, then choose it here. The file does not say which car and track it is for, so you pick them below.</p>
           <label class="sf-field">Export file (.csv)<input id="imp-file" type="file" accept=".csv,text/csv"></label>
           <div id="imp-summary" class="imp-summary" aria-live="polite"></div>
-          <label class="sf-field">Car<input id="imp-car" name="car" list="imp-cars" autocomplete="off" spellcheck="false" placeholder="Start typing, for example Mercedes"></label>
-          <label class="sf-field">Track<input id="imp-track" name="track" list="imp-tracks" autocomplete="off" spellcheck="false" placeholder="Start typing, for example Mugello"></label>
-          <datalist id="imp-cars"></datalist><datalist id="imp-tracks"></datalist>
+          <div class="pick">
+            <label class="sf-field">Car<input id="imp-car" name="car" data-pick="cars" role="combobox" aria-expanded="false" aria-controls="imp-car-list" autocomplete="off" spellcheck="false" placeholder="Search, for example Mercedes"></label>
+            <ul id="imp-car-list" class="pick-list" role="listbox" hidden></ul>
+          </div>
+          <div class="pick">
+            <label class="sf-field">Track<input id="imp-track" name="track" data-pick="tracks" role="combobox" aria-expanded="false" aria-controls="imp-track-list" autocomplete="off" spellcheck="false" placeholder="Search, for example Interlagos or Mugello"></label>
+            <ul id="imp-track-list" class="pick-list" role="listbox" hidden></ul>
+          </div>
           <div class="sf-actions"><button class="btn" type="submit" id="imp-go">Import laps</button><span id="imp-state" role="status"></span></div>
         </form>
       </section>`;
     if (!imp.catalog) {
       try { const r = await fetch(API + '/api/catalog'); if (r.ok) imp.catalog = await r.json(); } catch (e) { /* shown below */ }
     }
-    const cars = document.getElementById('imp-cars'), tracks = document.getElementById('imp-tracks');
-    if (!cars) return;                                    // the user moved on while the list loaded
+    if (!document.getElementById('imp-car')) return;      // the user moved on while the list loaded
     if (!imp.catalog || !imp.catalog.cars.length) {
       document.getElementById('imp-state').textContent = 'The car and track list is not available yet. Run a sync once, then reload this page.';
       return;
     }
+    const build = (map, alias) => [...map.values()].map(v => ({ id: v.id, label: v.label, hay: norm(v.label + ' ' + alias(v.label)) }));
     imp.maps = {
       cars: labelMap(imp.catalog.cars, c => c.name),
       tracks: labelMap(imp.catalog.tracks, t => (t.variant ? `${t.name} (${t.variant})` : t.name))
     };
-    const options = map => [...map.values()].map(v => `<option value="${esc(v.label)}"></option>`).join('');
-    cars.innerHTML = options(imp.maps.cars);
-    tracks.innerHTML = options(imp.maps.tracks);
+    imp.items = { cars: build(imp.maps.cars, () => ''), tracks: build(imp.maps.tracks, trackAlias) };
+    imp.sel = { cars: null, tracks: null };
+    imp.active = -1;
+  }
+
+  /* Car and track search: ignores accents and capitals, matches words in any order, knows common nicknames. */
+  const norm = s => String(s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  const TRACK_ALIASES = [
+    ['jose carlos pace', 'interlagos sao paulo brazil'], ['hermanos rodriguez', 'mexico city'], ['enzo e dino ferrari', 'imola'],
+    ['circuit of the americas', 'cota austin texas'], ['gilles villeneuve', 'montreal canada'], ['sarthe', 'le mans'],
+    ['spa-francorchamps', 'spa belgium'], ['catalunya', 'barcelona spain'], ['red bull ring', 'spielberg austria'],
+    ['hungaroring', 'budapest hungary'], ['zandvoort', 'netherlands holland'], ['okayama', 'japan'], ['suzuka', 'japan'],
+    ['silverstone', 'england uk'], ['brands hatch', 'england uk'], ['donington', 'england uk'], ['oulton park', 'england uk'],
+    ['lime rock', 'connecticut'], ['road atlanta', 'braselton georgia'], ['watkins glen', 'new york'], ['laguna seca', 'monterey california'],
+    ['daytona', 'florida'], ['sebring', 'florida'], ['indianapolis', 'indy']
+  ];
+  const trackAlias = label => { const n = norm(label); return TRACK_ALIASES.filter(([k]) => n.includes(k)).map(a => a[1]).join(' '); };
+  const PICK_MAX = 8;
+
+  function pickMatches(kind, query) {
+    const words = norm(query).split(' ').filter(Boolean);
+    if (!words.length || !imp.items) return [];
+    return imp.items[kind].filter(it => words.every(w => it.hay.includes(w)));
+  }
+  function showPicks(input) {
+    const kind = input.dataset.pick;
+    const list = document.getElementById(input.getAttribute('aria-controls'));
+    const all = pickMatches(kind, input.value), shown = all.slice(0, PICK_MAX);
+    imp.active = shown.length ? 0 : -1;
+    list.innerHTML = shown.map((it, i) => `<li role="option" id="${list.id}-${i}" aria-selected="${i === 0}"><button type="button" tabindex="-1" data-pick-id="${it.id}" data-pick-kind="${kind}" data-pick-label="${esc(it.label)}">${esc(it.label)}</button></li>`).join('')
+      + (all.length > PICK_MAX ? `<li class="pick-more">${all.length - PICK_MAX} more. Type more words to narrow it down.</li>` : '')
+      + (!all.length && input.value.trim() ? '<li class="pick-more">No match. Try fewer words, or the track\'s nickname.</li>' : '');
+    list.hidden = !list.innerHTML;
+    input.setAttribute('aria-expanded', String(!list.hidden));
+  }
+  function hidePicks(input) {
+    const list = document.getElementById(input.getAttribute('aria-controls'));
+    if (list) list.hidden = true;
+    input.setAttribute('aria-expanded', 'false');
+  }
+  function choosePick(kind, id, label) {
+    const input = document.querySelector(`[data-pick="${kind}"]`);
+    input.value = label;
+    imp.sel[kind] = id;
+    hidePicks(input);
+  }
+  function movePick(input, step) {
+    const list = document.getElementById(input.getAttribute('aria-controls'));
+    const buttons = [...list.querySelectorAll('button')];
+    if (!buttons.length) return;
+    imp.active = (imp.active + step + buttons.length) % buttons.length;
+    buttons.forEach((b, i) => b.parentElement.setAttribute('aria-selected', String(i === imp.active)));
+    buttons[imp.active].scrollIntoView({ block: 'nearest' });
   }
 
   async function onImportFile(file) {
@@ -329,8 +384,10 @@
     const p = imp.parsed;
     if (!p || p.error || !p.laps.length) return say('Choose a Garage61 export file with clean laps first.');
     if (!imp.maps) return say('The car and track list is not loaded yet.');
-    const car = (imp.maps.cars.get(form.car.value.trim().toLowerCase()) || {}).id;
-    const track = (imp.maps.tracks.get(form.track.value.trim().toLowerCase()) || {}).id;
+    // A choice made from the list, or a full name typed exactly (accents and capitals aside).
+    const resolve = (kind, input) => imp.sel[kind] || (imp.items[kind].find(it => norm(it.label) === norm(input.value.trim())) || {}).id;
+    const car = resolve('cars', form.car);
+    const track = resolve('tracks', form.track);
     if (!car) return say('Pick the car from the suggestions.');
     if (!track) return say('Pick the track from the suggestions.');
     const key = editKey();
@@ -616,6 +673,8 @@
       if (state.drivers.has(d)) { if (state.drivers.size > 1) state.drivers.delete(d); } else state.drivers.add(d);
       return route();
     }
+    const pick = e.target.closest('[data-pick-id]');
+    if (pick) return choosePick(pick.dataset.pickKind, Number(pick.dataset.pickId), pick.dataset.pickLabel);
     const del = e.target.closest('[data-del-file]');
     if (del) return deleteSetupFile(del.dataset.delFile);
     const lap = e.target.closest('[data-lap]');
@@ -630,6 +689,20 @@
     if ((e.key === 'Enter' || e.key === ' ') && e.target.classList && e.target.classList.contains("pt")) {
       e.preventDefault(); selectLap(e.target.dataset.lap);
     }
+    const input = e.target.dataset && e.target.dataset.pick ? e.target : null;
+    if (!input) return;
+    const list = document.getElementById(input.getAttribute('aria-controls'));
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (list.hidden) showPicks(input);
+      else movePick(input, e.key === 'ArrowDown' ? 1 : -1);
+    } else if (e.key === 'Enter' && !list.hidden) {
+      const b = list.querySelectorAll('button')[Math.max(imp.active, 0)];
+      if (b) { e.preventDefault(); choosePick(b.dataset.pickKind, Number(b.dataset.pickId), b.dataset.pickLabel); }
+    } else if (e.key === 'Escape') hidePicks(input);
+  });
+  document.addEventListener('focusout', e => {
+    if (e.target.dataset && e.target.dataset.pick) setTimeout(() => hidePicks(e.target), 150);   // after a tap on a suggestion lands
   });
   document.addEventListener('submit', e => {
     if (e.target.id === 'sf-form') { e.preventDefault(); addSetupFile(e.target); }
@@ -637,6 +710,7 @@
   });
   document.addEventListener('change', e => { if (e.target.id === 'imp-file') onImportFile(e.target.files[0]); });
   document.addEventListener('input', e => {
+    if (e.target.dataset && e.target.dataset.pick) { imp.sel[e.target.dataset.pick] = null; showPicks(e.target); return; }
     if (e.target.id !== 'notes') return;
     saveNote(state.comboId, e.target.value);
   });
