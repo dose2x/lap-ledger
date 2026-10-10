@@ -96,8 +96,8 @@
       const res = await fetch(API + '/api/combos', { headers: { accept: 'application/json' } });
       if (res.ok && (res.headers.get('content-type') || '').includes('json')) {
         const live = await res.json();
-        if (live.combos && live.combos.length) return live;
-        return { ...window.SAMPLE, waiting: true };
+        if (live.combos && live.combos.length) return { ...live, apiOk: true };
+        return { ...window.SAMPLE, waiting: true, apiOk: true };
       }
     } catch (e) { /* no backend yet */ }
     return window.SAMPLE;
@@ -221,11 +221,151 @@
     } catch (e) { alert('Could not delete the file. Check your connection and try again.'); }
   }
 
+  /* ---------- import laps (Garage61 CSV export) ---------- */
+  // Garage61's export lists the laps but not which car or track they belong to, so the user picks both. The Worker
+  // stores them as imported laps and the Garage61 sync replaces them once the API returns the same laps.
+  const imp = { parsed: null, catalog: null, maps: null };
+
+  function parseCsv(text) {
+    const rows = [];
+    let row = [], cell = '', quoted = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (quoted) {
+        if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else quoted = false; } else cell += ch;
+      } else if (ch === '"') quoted = true;
+      else if (ch === ',') { row.push(cell); cell = ''; }
+      else if (ch === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
+      else if (ch !== '\r') cell += ch;
+    }
+    if (cell || row.length) { row.push(cell); rows.push(row); }
+    return rows;
+  }
+
+  function parseExport(text) {
+    const table = parseCsv(text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text).filter(r => r.some(c => c.trim()));
+    if (!table.length) return { error: 'That file is empty.' };
+    const head = table[0].map(h => h.trim().toLowerCase());
+    const col = name => head.indexOf(name);
+    const missing = ['lap time', 'started at', 'driver'].filter(n => col(n) < 0);
+    if (missing.length) return { error: 'This does not look like a Garage61 lap export. Missing columns: ' + missing.join(', ') + '.' };
+    const iT = col('lap time'), iAt = col('started at'), iDr = col('driver'), iClean = col('clean'), iAir = col('air temperature'), iTrack = col('track temp');
+    const laps = [];
+    let unclean = 0, unreadable = 0;
+    for (const r of table.slice(1)) {
+      const t = Number(r[iT]), driver = (r[iDr] || '').trim(), at = (r[iAt] || '').trim();
+      if (!(t > 20 && t < 3600) || !Number.isFinite(Date.parse(at)) || !driver) { unreadable++; continue; }
+      if (iClean >= 0 && !['1', 'true'].includes((r[iClean] || '').trim().toLowerCase())) { unclean++; continue; }
+      laps.push({ t, at, driver, air: iAir >= 0 ? r[iAir] : null, track: iTrack >= 0 ? r[iTrack] : null });
+    }
+    return { laps, unclean, unreadable, drivers: [...new Set(laps.map(l => l.driver))], best: laps.length ? Math.min(...laps.map(l => l.t)) : null };
+  }
+
+  function summaryHtml(p) {
+    if (!p) return '';
+    if (p.error) return `<p class="imp-bad">${esc(p.error)}</p>`;
+    if (!p.laps.length) return '<p class="imp-bad">This file has no clean laps to import.</p>';
+    const left = p.unclean + p.unreadable;
+    return `<p><b>${p.laps.length}</b> clean ${p.laps.length === 1 ? 'lap' : 'laps'} will be imported${left ? `. ${left} unclean or unreadable ${left === 1 ? 'row is' : 'rows are'} left out` : ''}.
+      Driver${p.drivers.length === 1 ? '' : 's'}: ${p.drivers.map(esc).join(', ')}. Best lap <b class="mono">${fmt(Math.round(p.best * 1000))}</b>.</p>`;
+  }
+
+  // Name the user types or picks -> catalog id. A name shared by several entries gets its id appended.
+  function labelMap(list, label) {
+    const seen = {};
+    list.forEach(x => { const k = label(x).toLowerCase(); seen[k] = (seen[k] || 0) + 1; });
+    const map = new Map();
+    list.forEach(x => { let l = label(x); if (seen[l.toLowerCase()] > 1) l += ' #' + x.id; map.set(l.toLowerCase(), { id: x.id, label: l }); });
+    return map;
+  }
+
+  async function renderImport() {
+    imp.parsed = null;
+    const head = '<a class="back" href="#/">← All combos</a><h1 class="combo">Import laps</h1><p class="combo-track">From a Garage61 export file</p>';
+    if (!DATA.apiOk) {
+      $app.innerHTML = head + '<div class="empty"><strong>Importing needs the live app</strong>This copy is not connected to your Lap Ledger server, so there is nowhere to save the laps.</div>';
+      return;
+    }
+    $app.innerHTML = head + `
+      <section class="card">
+        <form id="imp-form" class="sf-form" novalidate>
+          <p class="hint">In Garage61, export the laps for one car and track as a CSV file, then choose it here. The file does not say which car and track it is for, so you pick them below.</p>
+          <label class="sf-field">Export file (.csv)<input id="imp-file" type="file" accept=".csv,text/csv"></label>
+          <div id="imp-summary" class="imp-summary" aria-live="polite"></div>
+          <label class="sf-field">Car<input id="imp-car" name="car" list="imp-cars" autocomplete="off" spellcheck="false" placeholder="Start typing, for example Mercedes"></label>
+          <label class="sf-field">Track<input id="imp-track" name="track" list="imp-tracks" autocomplete="off" spellcheck="false" placeholder="Start typing, for example Mugello"></label>
+          <datalist id="imp-cars"></datalist><datalist id="imp-tracks"></datalist>
+          <div class="sf-actions"><button class="btn" type="submit" id="imp-go">Import laps</button><span id="imp-state" role="status"></span></div>
+        </form>
+      </section>`;
+    if (!imp.catalog) {
+      try { const r = await fetch(API + '/api/catalog'); if (r.ok) imp.catalog = await r.json(); } catch (e) { /* shown below */ }
+    }
+    const cars = document.getElementById('imp-cars'), tracks = document.getElementById('imp-tracks');
+    if (!cars) return;                                    // the user moved on while the list loaded
+    if (!imp.catalog || !imp.catalog.cars.length) {
+      document.getElementById('imp-state').textContent = 'The car and track list is not available yet. Run a sync once, then reload this page.';
+      return;
+    }
+    imp.maps = {
+      cars: labelMap(imp.catalog.cars, c => c.name),
+      tracks: labelMap(imp.catalog.tracks, t => (t.variant ? `${t.name} (${t.variant})` : t.name))
+    };
+    const options = map => [...map.values()].map(v => `<option value="${esc(v.label)}"></option>`).join('');
+    cars.innerHTML = options(imp.maps.cars);
+    tracks.innerHTML = options(imp.maps.tracks);
+  }
+
+  async function onImportFile(file) {
+    const box = document.getElementById('imp-summary');
+    if (!file) { imp.parsed = null; if (box) box.innerHTML = ''; return; }
+    if (file.size > 2 * 1024 * 1024) imp.parsed = { error: 'That file is over 2 MB, which is too large for a lap export.' };
+    else imp.parsed = parseExport(await file.text());
+    if (box) box.innerHTML = summaryHtml(imp.parsed);
+  }
+
+  async function runImport(form) {
+    const say = m => { const s = document.getElementById('imp-state'); if (s) s.textContent = m; };
+    const p = imp.parsed;
+    if (!p || p.error || !p.laps.length) return say('Choose a Garage61 export file with clean laps first.');
+    if (!imp.maps) return say('The car and track list is not loaded yet.');
+    const car = (imp.maps.cars.get(form.car.value.trim().toLowerCase()) || {}).id;
+    const track = (imp.maps.tracks.get(form.track.value.trim().toLowerCase()) || {}).id;
+    if (!car) return say('Pick the car from the suggestions.');
+    if (!track) return say('Pick the track from the suggestions.');
+    const key = editKey();
+    if (!key) return say('Not imported. An edit key is needed.');
+    const go = document.getElementById('imp-go');
+    go.disabled = true;
+    let added = 0, skipped = 0;
+    try {
+      for (let i = 0; i < p.laps.length; i += 400) {
+        say(`Importing… ${Math.min(i + 400, p.laps.length)} of ${p.laps.length}`);
+        const res = await fetch(API + '/api/import-laps', {
+          method: 'POST', headers: { 'content-type': 'application/json', 'x-edit-key': key },
+          body: JSON.stringify({ car, track, laps: p.laps.slice(i, i + 400) })
+        });
+        if (res.status === 401) { store.set('ledger.editkey', ''); return say('Not imported. That edit key was wrong.'); }
+        const out = await res.json().catch(() => ({}));
+        if (!res.ok) return say((out.error || 'Could not import. Try again.') + (added ? ` ${added} laps were added before this.` : ''));
+        added += out.added; skipped += out.skipped;
+      }
+      store.set('ledger.editkey', key);
+      const r = await fetch(API + '/api/combos', { headers: { accept: 'application/json' }, cache: 'no-store' });
+      if (!r.ok) throw new Error(r.status);
+      await adopt({ ...(await r.json()), apiOk: true });
+      const target = '#/combo/' + car + '-' + track;
+      if (location.hash === target) route(); else location.hash = target;
+    } catch (e) {
+      say(`Could not finish. ${added ? added + ' laps were added; reload the app to see them.' : 'Check your connection and try again.'}`);
+    } finally { go.disabled = false; }
+  }
+
   /* ---------- home ---------- */
   function renderHome() {
     const q = state.query.trim().toLowerCase();
     const mine = new Set([DATA.me]);
-    const pool = state.mode === 'me' ? mine : null;
+    const pool = state.mode === 'me' && DATA.me ? mine : null;
     const rows = DATA.combos
       .map(c => {
         const laps = visibleLaps(c, pool);
@@ -239,7 +379,10 @@
         <input id="q" type="search" inputmode="search" autocomplete="off" spellcheck="false"
                placeholder="Search car or track" aria-label="Search car or track" value="${esc(state.query)}">
       </div>
-      <p class="count" aria-live="polite">${rows.length} car and track ${rows.length === 1 ? 'combo' : 'combos'}${q ? ' match' : ''}</p>
+      <div class="count-row">
+        <p class="count" aria-live="polite">${rows.length} car and track ${rows.length === 1 ? 'combo' : 'combos'}${q ? ' match' : ''}</p>
+        <a class="imp-link" href="#/import">Import laps</a>
+      </div>
       ${rows.length ? `<ul class="rows">${rows.map(x => `
         <li><a class="row" href="#/combo/${x.c.id}">
           <span><span class="car">${esc(x.c.car)}</span><br><span class="track">${esc(x.c.track)}</span></span>
@@ -489,10 +632,10 @@
     }
   });
   document.addEventListener('submit', e => {
-    if (e.target.id !== 'sf-form') return;
-    e.preventDefault();
-    addSetupFile(e.target);
+    if (e.target.id === 'sf-form') { e.preventDefault(); addSetupFile(e.target); }
+    else if (e.target.id === 'imp-form') { e.preventDefault(); runImport(e.target); }
   });
+  document.addEventListener('change', e => { if (e.target.id === 'imp-file') onImportFile(e.target.files[0]); });
   document.addEventListener('input', e => {
     if (e.target.id !== 'notes') return;
     saveNote(state.comboId, e.target.value);
@@ -516,23 +659,28 @@
   function route() {
     flushNote();
     const m = location.hash.match(/^#\/combo\/(.+)$/);
-    if (m) renderDetail(m[1]); else { state.comboId = null; renderHome(); }
+    if (m) renderDetail(m[1]);
+    else if (location.hash === '#/import') { state.comboId = null; renderImport(); }
+    else { state.comboId = null; renderHome(); }
   }
 
   /* ---------- boot ---------- */
-  load().then(async d => {
+  // Makes `d` the data on screen: driver colors, shared notes and the sample-data banner.
+  async function adopt(d) {
     DATA = d;
+    state.comboId = null;
+    Object.keys(DRIVER_COLOR).forEach(k => delete DRIVER_COLOR[k]);
     const order = [d.me, ...d.drivers.map(x => x.id).filter(x => x !== d.me)].filter(Boolean);
     order.forEach((id, i) => { DRIVER_COLOR[id] = PALETTE[i % PALETTE.length]; });
     if (!d.isSample) {
       try { const r = await fetch(API + '/api/notes'); if (r.ok) notesCache = await r.json(); } catch (e) { /* notes load later */ }
     }
+    $banner.hidden = !d.isSample;
     if (d.isSample) {
-      $banner.hidden = false;
-      $banner.innerHTML = `<span>Sample data. ${d.waiting ? 'No laps have synced from Garage61 yet.' : 'Garage61 is not connected yet.'}</span>`;
+      $banner.innerHTML = `<span>Sample data. ${d.waiting ? 'No laps have synced from Garage61 yet. <a href="#/import">Import a Garage61 export</a> to see your own.' : 'Garage61 is not connected yet.'}</span>`;
     }
-    route();
-  });
+  }
+  load().then(async d => { await adopt(d); route(); });
 
   if ('serviceWorker' in navigator && location.protocol.startsWith('http') && location.hostname !== 'localhost') {
     navigator.serviceWorker.register('sw.js').catch(() => {});

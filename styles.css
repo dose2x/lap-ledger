@@ -204,3 +204,16 @@ textarea:focus{border-color:var(--ink);outline:none}
 .sf-check input{width:18px;height:18px;accent-color:var(--best)}
 .sf-actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
 #sf-state{font-size:13px;color:var(--ink-2)}
+
+/* import laps */
+.count-row{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:0 2px 8px}
+.count-row .count{margin:0}
+.imp-link{font-size:13.5px;font-weight:600;color:var(--ink);white-space:nowrap}
+.imp-link:hover{color:var(--best)}
+.banner a{color:inherit;font-weight:600}
+.sf-field input:not([type=file]){font:400 16px var(--body);color:var(--ink);padding:11px 12px;border:1.5px solid var(--line);border-radius:8px;background:var(--field);width:100%}
+.sf-field input:not([type=file]):focus{border-color:var(--ink);outline:none}
+.imp-summary:empty{display:none}
+.imp-summary p{margin:0;padding:10px 12px;border-radius:8px;background:var(--hover);font-size:14.5px;line-height:1.5}
+.imp-summary .imp-bad{background:var(--changed);color:var(--changed-ink)}
+.mono{font-family:var(--mono)}
