@@ -225,3 +225,9 @@ textarea:focus{border-color:var(--ink);outline:none}
 .pick-more{padding:8px 10px;font-size:13px;color:var(--ink-2)}
 .imp-note{margin:0 0 12px;font-size:14.5px;line-height:1.5}
 #imp-undo-state{font-size:13px;color:var(--ink-2)}
+.imp-suggest:empty{display:none}
+.imp-suggest p{margin:0 0 8px;padding:10px 12px;border-radius:8px;font-size:14.5px;line-height:1.5}
+.imp-hint{background:var(--hover);color:var(--ink-2)}
+.imp-ok{background:var(--sel);color:var(--ink)}
+.imp-cands{display:grid;gap:8px}
+.imp-cands .btn{text-align:left;line-height:1.4;padding:10px 12px;font-weight:500;white-space:normal}

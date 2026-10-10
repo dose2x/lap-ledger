@@ -229,7 +229,13 @@
   /* ---------- import laps (Garage61 CSV export) ---------- */
   // Garage61's export lists the laps but not which car or track they belong to, so the user picks both. The Worker
   // stores them as imported laps and the Garage61 sync replaces them once the API returns the same laps.
-  const imp = { parsed: null, catalog: null, maps: null, items: null, sel: { cars: null, tracks: null }, active: -1, reading: 0 };
+  const imp = {
+    parsed: null, catalog: null, maps: null, items: null, byId: null, candidates: [],
+    sel: { cars: null, tracks: null }, active: -1, reading: 0,
+    ready: Promise.resolve(), markReady: () => {}            // settles once the car and track list has loaded
+  };
+  const SESSION_NAMES = { 1: 'Practice', 2: 'Qualifying', 3: 'Race' };
+  const dayLabel = day => new Date(day + 'T00:00:00Z').toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
 
   function parseCsv(text) {
     const rows = [];
@@ -266,7 +272,7 @@
       laps.push({ t, at, driver, air: iAir >= 0 ? r[iAir] : null, track: iTrack >= 0 ? r[iTrack] : null });
     }
     return {
-      laps, unclean, badTime, badDate, noDriver, unreadable: badTime + badDate + noDriver,
+      laps, total: table.length - 1, unclean, badTime, badDate, noDriver, unreadable: badTime + badDate + noDriver,
       drivers: [...new Set(laps.map(l => l.driver))], best: laps.length ? Math.min(...laps.map(l => l.t)) : null
     };
   }
@@ -307,6 +313,7 @@
   async function renderImport() {
     imp.parsed = null;
     imp.reading++;                                        // a file still being read belongs to the old page
+    imp.ready = new Promise(resolve => { imp.markReady = resolve; });
     const head = '<a class="back" href="#/">← All combos</a><h1 class="combo">Import laps</h1><p class="combo-track">From a Garage61 export file</p>';
     if (!DATA.apiOk) {
       $app.innerHTML = head + '<div class="empty"><strong>Importing needs the live app</strong>This copy is not connected to your Lap Ledger server, so there is nowhere to save the laps.</div>';
@@ -318,6 +325,7 @@
           <p class="hint">In Garage61, export the laps for one car and track as a CSV file, then choose it here. The file does not say which car and track it is for, so you pick them below.</p>
           <label class="sf-field">Export file (.csv)<input id="imp-file" type="file" accept=".csv,text/csv"></label>
           <div id="imp-summary" class="imp-summary" aria-live="polite"></div>
+          <div id="imp-suggest" class="imp-suggest" aria-live="polite"></div>
           <div class="pick">
             <label class="sf-field">Car<input id="imp-car" name="car" data-pick="cars" role="combobox" aria-expanded="false" aria-controls="imp-car-list" autocomplete="off" spellcheck="false" placeholder="Search, for example Mercedes"></label>
             <ul id="imp-car-list" class="pick-list" role="listbox" hidden></ul>
@@ -335,6 +343,7 @@
     if (!document.getElementById('imp-car')) return;      // the user moved on while the list loaded
     if (!imp.catalog || !imp.catalog.cars.length) {
       document.getElementById('imp-state').textContent = 'The car and track list is not available yet. Run a sync once, then reload this page.';
+      imp.markReady();
       return;
     }
     const build = (map, alias) => [...map.values()].map(v => ({ id: v.id, label: v.label, hay: norm(v.label + ' ' + alias(v.label)) }));
@@ -343,8 +352,13 @@
       tracks: labelMap(imp.catalog.tracks, t => (t.variant ? `${t.name} (${t.variant})` : t.name))
     };
     imp.items = { cars: build(imp.maps.cars, () => ''), tracks: build(imp.maps.tracks, trackAlias) };
+    imp.byId = {
+      cars: new Map([...imp.maps.cars.values()].map(v => [v.id, v.label])),
+      tracks: new Map([...imp.maps.tracks.values()].map(v => [v.id, v.label]))
+    };
     imp.sel = { cars: null, tracks: null };
     imp.active = -1;
+    imp.markReady();
     // The user may have started typing while the list loaded; show their suggestions now.
     const typing = document.activeElement;
     if (typing && typing.dataset && typing.dataset.pick && typing.value) showPicks(typing);
@@ -409,6 +423,8 @@
   async function onImportFile(file) {
     const box = document.getElementById('imp-summary');
     const ticket = ++imp.reading;                         // only the newest file chosen may set the result
+    const suggest = document.getElementById('imp-suggest');
+    if (suggest) suggest.innerHTML = '';
     if (!file) { imp.parsed = null; if (box) box.innerHTML = ''; return; }
     imp.parsed = null;
     if (box) box.innerHTML = '';
@@ -418,6 +434,68 @@
     if (ticket !== imp.reading) return;
     imp.parsed = parsed;
     if (box) box.innerHTML = summaryHtml(imp.parsed);
+    offerSuggestion(ticket);
+  }
+
+  /* Suggesting the car and track: the export names neither, but its dates and clean-lap count can be matched against
+     the driver's own Garage61 driving history (done by the Worker). It is only a suggestion; the fields stay editable. */
+  function offerSuggestion(ticket) {
+    const box = document.getElementById('imp-suggest');
+    const p = imp.parsed;
+    if (!box || !p || p.error || !p.laps.length) return;
+    if (store.get('ledger.editkey')) runSuggestion(ticket, store.get('ledger.editkey'));
+    else box.innerHTML = '<button type="button" class="btn ghost sm" data-suggest>Suggest the car and track from my Garage61 history</button>';   // asking for the key unprompted would surprise
+  }
+
+  async function runSuggestion(ticket, key) {
+    const box = document.getElementById('imp-suggest');
+    const p = imp.parsed;
+    const note = (text, cls = 'imp-hint') => { if (box && ticket === imp.reading) box.innerHTML = `<p class="${cls}">${text}</p>`; };
+    note('Checking your Garage61 driving history…');
+    await imp.ready;
+    if (ticket !== imp.reading || !box) return;
+    if (!imp.byId) return note('The car and track list is not available, so nothing can be suggested.');
+    const days = [...new Set(p.laps.map(l => new Date(l.at).toISOString().slice(0, 10)))].sort();
+    try {
+      const res = await fetch(API + '/api/guess-combo', {
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-edit-key': key },
+        body: JSON.stringify({ days, clean: p.laps.length, rows: p.total })
+      });
+      if (ticket !== imp.reading) return;
+      if (res.status === 401) { store.set('ledger.editkey', ''); return note('That edit key was wrong, so nothing was suggested.'); }
+      if (res.status === 429) return note(await lockoutText(res));
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok) return note((out.error || 'Your driving history could not be checked.') + ' Pick the car and track yourself.');
+      store.set('ledger.editkey', key);
+      showCandidates((out.candidates || []).filter(c => imp.byId.cars.has(c.car) && imp.byId.tracks.has(c.track)), ticket);
+    } catch (e) { note('Your driving history could not be checked. Pick the car and track yourself.'); }
+  }
+
+  function candidateText(c) {
+    const when = c.days.length > 1 ? `${dayLabel(c.days[0])} to ${dayLabel(c.days[c.days.length - 1])}` : dayLabel(c.days[0]);
+    const what = c.match === 'session' ? SESSION_NAMES[c.session] || 'Session' : 'all sessions that day';
+    return `<b>${esc(imp.byId.cars.get(c.car))}</b> at <b>${esc(imp.byId.tracks.get(c.track))}</b> (${what}, ${c.clean} clean ${c.clean === 1 ? 'lap' : 'laps'}, ${when})`;
+  }
+
+  function applyCandidate(c) {
+    choosePick('cars', c.car, imp.byId.cars.get(c.car));
+    choosePick('tracks', c.track, imp.byId.tracks.get(c.track));
+    const box = document.getElementById('imp-suggest');
+    if (box) box.innerHTML = `<p class="imp-ok">Matched from your Garage61 history: ${candidateText(c)}. Change them below if this is wrong.</p>`;
+  }
+
+  function showCandidates(list, ticket) {
+    const box = document.getElementById('imp-suggest');
+    if (!box || ticket !== imp.reading) return;
+    imp.candidates = list;
+    if (!list.length) {
+      box.innerHTML = '<p class="imp-hint">No match in your Garage61 driving history. It only knows your own laps, so pick the car and track yourself.</p>';
+      return;
+    }
+    const untouched = !imp.sel.cars && !imp.sel.tracks && !document.getElementById('imp-car').value.trim() && !document.getElementById('imp-track').value.trim();
+    if (list.length === 1 && untouched) return applyCandidate(list[0]);
+    box.innerHTML = `<p class="imp-hint">${list.length === 1 ? 'Your Garage61 history suggests:' : 'More than one session in your history fits. Which is this export?'}</p>
+      <div class="imp-cands">${list.map((c, i) => `<button type="button" class="btn ghost" data-suggest-pick="${i}">${candidateText(c)}</button>`).join('')}</div>`;
   }
 
   async function runImport(form) {
@@ -747,6 +825,9 @@
     const pick = e.target.closest('[data-pick-id]');
     if (pick) return choosePick(pick.dataset.pickKind, Number(pick.dataset.pickId), pick.dataset.pickLabel);
     if (e.target.closest('[data-del-imported]')) return removeImported();
+    if (e.target.closest('[data-suggest]')) { const key = editKey(); if (key) runSuggestion(imp.reading, key); return; }
+    const sp = e.target.closest('[data-suggest-pick]');
+    if (sp) { const c = imp.candidates[Number(sp.dataset.suggestPick)]; if (c) applyCandidate(c); return; }
     const del = e.target.closest('[data-del-file]');
     if (del) return deleteSetupFile(del.dataset.delFile);
     const lap = e.target.closest('[data-lap]');
