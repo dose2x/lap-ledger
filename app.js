@@ -564,7 +564,8 @@
   // The Worker reads the leagues' public standings widgets and shares the result for a few minutes (see /api/standings).
   const tabsHtml = active => `<nav class="tabs" aria-label="Sections">
       <a href="#/" ${active === 'laps' ? 'aria-current="page"' : ''}>Laps</a>
-      <a href="#/standings" ${active === 'standings' ? 'aria-current="page"' : ''}>Standings</a></nav>`;
+      <a href="#/standings" ${active === 'standings' ? 'aria-current="page"' : ''}>Standings</a>
+      <a href="#/stats" ${active === 'stats' ? 'aria-current="page"' : ''}>Stats</a></nav>`;
   const ordinal = n => { const v = n % 100; return n + (['th', 'st', 'nd', 'rd'][(v - 20) % 10] || ['th', 'st', 'nd', 'rd'][v] || 'th'); };
   const standings = { data: null, at: 0 };
 
@@ -990,6 +991,7 @@
     if (m) renderDetail(m[1]);
     else if (location.hash === '#/import') { state.comboId = null; renderImport(); }
     else if (location.hash === '#/standings') { state.comboId = null; renderStandings(false); }
+    else if (/^#\/stats(\/|$)/.test(location.hash)) { state.comboId = null; if (window.LedgerStatsUI) window.LedgerStatsUI.render(); }
     else { state.comboId = null; renderHome(); }
   }
 
@@ -1009,6 +1011,10 @@
       $banner.innerHTML = `<span>Sample data. ${d.waiting ? 'No laps have synced from Garage61 yet. <a href="#/import">Import a Garage61 export</a> to see your own.' : 'Garage61 is not connected yet.'}</span>`;
     }
   }
+  // What the Stats pages (stats-ui.js) borrow from this file.
+  window.Ledger = {
+    get app() { return $app; }, get apiOk() { return !!(DATA && DATA.apiOk); }, API, esc, store, editKey, lockoutText, tabsHtml
+  };
   load().then(async d => { await adopt(d); route(); });
 
   if ('serviceWorker' in navigator && location.protocol.startsWith('http') && location.hostname !== 'localhost') {
