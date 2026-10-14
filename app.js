@@ -579,14 +579,24 @@
 
   function standingSummary(s) {
     const m = s.mine;
-    if (!m) return '<p class="imp-hint">You are not listed in this series.</p>';
+    if (!m) {
+      // The name on XtremeScoring may be written differently from the one in the Worker settings.
+      const alike = (s.similar || []).map(esc).join(', ');
+      return alike
+        ? `<p class="imp-hint">Your name was not found in this series. Similar names in the table: <b>${alike}</b>. If that is you, the name in the Worker settings needs to match it.</p>`
+        : '<p class="imp-hint">You are not listed in this series.</p>';
+    }
     const rows = (s.classes.find(c => c.name === m.class) || { rows: [] }).rows;
-    const behind = rows[m.pos];                                    // the driver one place below
+    const at = rows.findIndex(r => r.me);                          // neighbours come from where the row really is, not from its position number
+    const ahead = at > 0 ? rows[at - 1] : null;
+    const behind = at >= 0 ? rows[at + 1] : null;
     const chips = [];
     chips.push(m.toLeader === 0 ? '<span class="chip-gap good">You lead</span>' : `<span class="chip-gap">${Math.abs(m.toLeader)} behind the leader</span>`);
-    if (m.pos > 1 && m.toNext !== 0) chips.push(`<span class="chip-gap">${Math.abs(m.toNext)} behind ${ordinal(m.pos - 1)}</span>`);
-    if (m.pos > 1 && m.toNext === 0) chips.push(`<span class="chip-gap">level with ${ordinal(m.pos - 1)}</span>`);
-    if (behind) chips.push(`<span class="chip-gap ${m.pts - behind.pts > 0 ? 'good' : ''}">${m.pts - behind.pts} ahead of ${ordinal(m.pos + 1)}</span>`);
+    if (ahead) {
+      const gap = ahead.pts - m.pts;
+      chips.push(gap === 0 ? `<span class="chip-gap">level with ${ordinal(ahead.pos)}</span>` : `<span class="chip-gap">${gap} behind ${ordinal(ahead.pos)}</span>`);
+    }
+    if (behind) chips.push(`<span class="chip-gap ${m.pts - behind.pts > 0 ? 'good' : ''}">${m.pts - behind.pts} ahead of ${ordinal(behind.pos)}</span>`);
     return `<div class="st-me">
         <div class="st-pos">${esc(ordinal(m.pos))}</div>
         <div><div class="st-line"><b>${m.pts} points</b> · ${esc(m.class)}, ${m.of} drivers</div>
@@ -606,10 +616,23 @@
           <td class="num">${r.toLeader === 0 ? 'Leader' : r.toLeader ?? ''}</td></tr>`).join('')}</tbody></table></div></details>`;
   }
 
+  const clock = at => new Date(at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+
   function seriesCard(s) {
-    if (s.error) return `<section class="card"><h2>${esc(s.name)}</h2><p class="imp-hint">${esc(s.error)} Try again in a minute.</p></section>`;
+    if (s.error) {
+      // A changed page layout needs a fix on our side, so say that; a plain outage just needs a little time.
+      const hint = s.kind === 'format' ? '' : ' Try again in a minute.';
+      return `<section class="card"><h2>${esc(s.name)}</h2><p class="${s.kind === 'format' ? 'imp-bad' : 'imp-hint'}">${esc(s.error)}${hint}</p></section>`;
+    }
+    // The last good read is shown when XtremeScoring cannot be reached or its page changed; say how old it is.
+    const staleNote = s.stale
+      ? `<p class="${s.staleReason === 'format' ? 'imp-bad' : 'imp-hint'}">${s.staleReason === 'format'
+          ? 'XtremeScoring seems to have changed how its standings page is laid out, so these are the last standings that could be read'
+          : 'XtremeScoring could not be reached, so these are the last standings that could be read'}${s.asOf ? ` (${esc(clock(s.asOf))})` : ''}.</p>`
+      : '';
     return `<section class="card st-card" aria-label="${esc(s.name)}">
       <h2>${esc(s.name)}${s.title ? `<small>${esc(s.title)}</small>` : ''}</h2>
+      ${staleNote}
       ${standingSummary(s)}
       ${s.classes.map(c => classTable(c, s.mine && s.mine.class === c.name)).join('')}
     </section>`;
@@ -630,7 +653,7 @@
       return;
     }
     if (location.hash !== '#/standings') return;                  // the user moved on while it loaded
-    const updated = new Date(data.fetchedAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    const updated = clock(data.fetchedAt);
     $app.innerHTML = head + (data.series.length ? data.series.map(seriesCard).join('')
       : '<div class="empty"><strong>No series set up</strong>Add a standings address in the Worker settings.</div>')
       + `<p class="st-foot">Live from XtremeScoring. Updated ${esc(updated)}. <button type="button" class="btn ghost sm" data-standings-reload>Refresh</button></p>`;

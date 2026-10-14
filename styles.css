@@ -265,3 +265,8 @@ textarea:focus{border-color:var(--ink);outline:none}
   .st-table th,.st-table td{padding-left:5px;padding-right:5px}
   .st-table td:nth-child(2){white-space:normal}
 }
+
+/* notices inside standings cards (last-known standings, layout changed, name not found) */
+.st-card p.imp-hint,.st-card p.imp-bad,.card>p.imp-hint,.card>p.imp-bad{margin:0 0 12px;padding:10px 12px;border-radius:8px;font-size:14.5px;line-height:1.5}
+.st-card p.imp-hint,.card>p.imp-hint{background:var(--hover);color:var(--ink-2)}
+.st-card p.imp-bad,.card>p.imp-bad{background:var(--changed);color:var(--changed-ink)}
