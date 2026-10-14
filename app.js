@@ -560,6 +560,82 @@
     } catch (e) { say('Could not remove the laps. Check your connection and try again.'); }
   }
 
+  /* ---------- standings (XtremeScoring series tables) ---------- */
+  // The Worker reads the leagues' public standings widgets and shares the result for a few minutes (see /api/standings).
+  const tabsHtml = active => `<nav class="tabs" aria-label="Sections">
+      <a href="#/" ${active === 'laps' ? 'aria-current="page"' : ''}>Laps</a>
+      <a href="#/standings" ${active === 'standings' ? 'aria-current="page"' : ''}>Standings</a></nav>`;
+  const ordinal = n => { const v = n % 100; return n + (['th', 'st', 'nd', 'rd'][(v - 20) % 10] || ['th', 'st', 'nd', 'rd'][v] || 'th'); };
+  const standings = { data: null, at: 0 };
+
+  async function loadStandings(force) {
+    if (!force && standings.data && Date.now() - standings.at < 60000) return standings.data;
+    const res = await fetch(API + '/api/standings', { headers: { accept: 'application/json' } });
+    if (!res.ok) throw new Error(res.status);
+    standings.data = await res.json();
+    standings.at = Date.now();
+    return standings.data;
+  }
+
+  function standingSummary(s) {
+    const m = s.mine;
+    if (!m) return '<p class="imp-hint">You are not listed in this series.</p>';
+    const rows = (s.classes.find(c => c.name === m.class) || { rows: [] }).rows;
+    const behind = rows[m.pos];                                    // the driver one place below
+    const chips = [];
+    chips.push(m.toLeader === 0 ? '<span class="chip-gap good">You lead</span>' : `<span class="chip-gap">${Math.abs(m.toLeader)} behind the leader</span>`);
+    if (m.pos > 1 && m.toNext !== 0) chips.push(`<span class="chip-gap">${Math.abs(m.toNext)} behind ${ordinal(m.pos - 1)}</span>`);
+    if (m.pos > 1 && m.toNext === 0) chips.push(`<span class="chip-gap">level with ${ordinal(m.pos - 1)}</span>`);
+    if (behind) chips.push(`<span class="chip-gap ${m.pts - behind.pts > 0 ? 'good' : ''}">${m.pts - behind.pts} ahead of ${ordinal(m.pos + 1)}</span>`);
+    return `<div class="st-me">
+        <div class="st-pos">${esc(ordinal(m.pos))}</div>
+        <div><div class="st-line"><b>${m.pts} points</b> · ${esc(m.class)}, ${m.of} drivers</div>
+        <div class="st-chips">${chips.join('')}</div></div></div>`;
+  }
+
+  function classTable(c, open) {
+    const move = r => (r.chg > 0 ? `<span class="up">▲${r.chg}</span>` : r.chg < 0 ? `<span class="down">▼${-r.chg}</span>` : '');
+    return `<details class="st-class"${open ? ' open' : ''}><summary>${esc(c.name)} <small>${c.rows.length} drivers</small></summary>
+      <div class="st-wrap"><table class="st-table"><caption class="sr-only">${esc(c.name)} standings</caption>
+        <thead><tr><th scope="col">Pos</th><th scope="col">Driver</th><th scope="col" class="st-car">Car</th><th scope="col" class="num">Pts</th><th scope="col" class="num">Gap</th></tr></thead>
+        <tbody>${c.rows.map(r => `<tr${r.me ? ' class="me" aria-current="true"' : ''}>
+          <td>${r.pos} ${move(r)}</td>
+          <td>${r.number ? `<span class="st-no">#${esc(r.number)}</span> ` : ''}${esc(r.driver)}</td>
+          <td class="st-car">${esc(r.car || '')}</td>
+          <td class="num">${r.pts ?? ''}</td>
+          <td class="num">${r.toLeader === 0 ? 'Leader' : r.toLeader ?? ''}</td></tr>`).join('')}</tbody></table></div></details>`;
+  }
+
+  function seriesCard(s) {
+    if (s.error) return `<section class="card"><h2>${esc(s.name)}</h2><p class="imp-hint">${esc(s.error)} Try again in a minute.</p></section>`;
+    return `<section class="card st-card" aria-label="${esc(s.name)}">
+      <h2>${esc(s.name)}${s.title ? `<small>${esc(s.title)}</small>` : ''}</h2>
+      ${standingSummary(s)}
+      ${s.classes.map(c => classTable(c, s.mine && s.mine.class === c.name)).join('')}
+    </section>`;
+  }
+
+  async function renderStandings(force) {
+    const head = tabsHtml('standings');
+    if (!DATA.apiOk) {
+      $app.innerHTML = head + '<div class="empty"><strong>Standings need the live app</strong>This copy is not connected to your Lap Ledger server.</div>';
+      return;
+    }
+    if (!standings.data) $app.innerHTML = head + '<p class="imp-hint st-load">Loading standings…</p>';
+    let data;
+    try { data = await loadStandings(force); }
+    catch (e) {
+      if (location.hash !== '#/standings') return;
+      $app.innerHTML = head + '<div class="empty"><strong>Standings did not load</strong>Check your connection, then <button type="button" class="btn ghost sm" data-standings-reload>try again</button>.</div>';
+      return;
+    }
+    if (location.hash !== '#/standings') return;                  // the user moved on while it loaded
+    const updated = new Date(data.fetchedAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    $app.innerHTML = head + (data.series.length ? data.series.map(seriesCard).join('')
+      : '<div class="empty"><strong>No series set up</strong>Add a standings address in the Worker settings.</div>')
+      + `<p class="st-foot">Live from XtremeScoring. Updated ${esc(updated)}. <button type="button" class="btn ghost sm" data-standings-reload>Refresh</button></p>`;
+  }
+
   /* ---------- home ---------- */
   function renderHome() {
     const q = state.query.trim().toLowerCase();
@@ -574,6 +650,7 @@
       .sort((a, b) => b.laps[b.laps.length - 1].at - a.laps[a.laps.length - 1].at);
 
     $app.innerHTML = `
+      ${tabsHtml('laps')}
       <div class="find">
         <input id="q" type="search" inputmode="search" autocomplete="off" spellcheck="false"
                placeholder="Search car or track" aria-label="Search car or track" value="${esc(state.query)}">
@@ -825,6 +902,7 @@
     const pick = e.target.closest('[data-pick-id]');
     if (pick) return choosePick(pick.dataset.pickKind, Number(pick.dataset.pickId), pick.dataset.pickLabel);
     if (e.target.closest('[data-del-imported]')) return removeImported();
+    if (e.target.closest('[data-standings-reload]')) return renderStandings(true);
     if (e.target.closest('[data-suggest]')) { const key = editKey(); if (key) runSuggestion(imp.reading, key); return; }
     const sp = e.target.closest('[data-suggest-pick]');
     if (sp) { const c = imp.candidates[Number(sp.dataset.suggestPick)]; if (c) applyCandidate(c); return; }
@@ -888,6 +966,7 @@
     const m = location.hash.match(/^#\/combo\/(.+)$/);
     if (m) renderDetail(m[1]);
     else if (location.hash === '#/import') { state.comboId = null; renderImport(); }
+    else if (location.hash === '#/standings') { state.comboId = null; renderStandings(false); }
     else { state.comboId = null; renderHome(); }
   }
 

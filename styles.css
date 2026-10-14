@@ -231,3 +231,37 @@ textarea:focus{border-color:var(--ink);outline:none}
 .imp-ok{background:var(--sel);color:var(--ink)}
 .imp-cands{display:grid;gap:8px}
 .imp-cands .btn{text-align:left;line-height:1.4;padding:10px 12px;font-weight:500;white-space:normal}
+
+/* section tabs and standings */
+.tabs{display:flex;gap:6px;margin:10px 0 4px}
+.tabs a{padding:8px 18px;border-radius:999px;border:1px solid var(--line);background:var(--panel);font-weight:600;font-size:14px;text-decoration:none;color:var(--ink-2)}
+.tabs a[aria-current="page"]{background:var(--ink);border-color:var(--ink);color:var(--paper)}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.st-card h2 small{display:block;margin:4px 0 0}
+.st-me{display:flex;gap:16px;align-items:center;padding:12px 14px;margin:0 0 12px;background:var(--sel);border-radius:10px;box-shadow:inset 3px 0 0 var(--best)}
+.st-pos{font:900 clamp(40px,12vw,56px)/1 var(--display);text-transform:uppercase;color:var(--best);min-width:1.6em}
+.st-line{font-size:15px}
+.st-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.chip-gap{font-size:12.5px;font-weight:600;padding:3px 10px;border-radius:999px;background:var(--panel);border:1px solid var(--line);color:var(--ink-2)}
+.chip-gap.good{color:var(--pb);border-color:var(--pb)}
+.st-class{border-top:1px solid var(--line)}
+.st-class summary{cursor:pointer;padding:10px 2px;font:800 18px/1 var(--display);text-transform:uppercase;letter-spacing:.03em;list-style-position:inside}
+.st-class summary small{font:500 12.5px var(--body);text-transform:none;letter-spacing:0;color:var(--ink-2);margin-left:8px}
+.st-wrap{overflow-x:auto;margin-bottom:8px}
+.st-table{width:100%;border-collapse:collapse;font-size:14px;min-width:420px}
+.st-table th{text-align:left;font-size:11.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-2);padding:6px 8px;border-bottom:1.5px solid var(--line)}
+.st-table td{padding:7px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+.st-table .num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+.st-table tr.me td{background:var(--sel);font-weight:700}
+.st-table tr.me td:first-child{box-shadow:inset 3px 0 0 var(--best)}
+.st-no{font-family:var(--mono);color:var(--ink-2);font-size:12.5px}
+.up{color:var(--pb);font-size:11.5px;font-weight:700}.down{color:#D6453A;font-size:11.5px;font-weight:700}
+.st-foot{font-size:13px;color:var(--ink-2);margin:14px 2px 0}
+.st-load{margin-top:12px}
+
+@media (max-width:560px){
+  .st-car{display:none}                      /* on a phone the points and gap matter more than the car */
+  .st-table{min-width:0}
+  .st-table th,.st-table td{padding-left:5px;padding-right:5px}
+  .st-table td:nth-child(2){white-space:normal}
+}
