@@ -12,7 +12,8 @@
   /* ---- small formatting helpers -------------------------------------------------------------------------- */
   const n0 = n => Math.round(n).toLocaleString('en-US');
   const pct = n => `${Math.round(n)}%`;
-  const signed = (n, fmt, unit = '') => `${n < 0 ? '−' : '+'}${fmt(Math.abs(n))}${unit}`;
+  // The sign follows what is shown: a change that rounds to nothing reads "0", not "−0".
+  const signed = (n, fmt, unit = '') => { const text = fmt(Math.abs(n)); return /[1-9]/.test(text) ? `${n < 0 ? '−' : '+'}${text}${unit}` : `0${unit}`; };
   const dateText = ms => new Date(ms).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
   const monthText = ms => new Date(ms).toLocaleDateString('en-US', { month: 'short', year: '2-digit', timeZone: 'UTC' });
   const clock = ms => new Date(ms).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
@@ -29,9 +30,10 @@
     teams: {}                                              // team id -> { state, rows, members, message, at }
   };
   let token = 0;                                           // a newer render makes older, slower ones stop
+  const STALE_MS = 5 * 60 * 1000;                          // a PWA left open should not keep showing yesterday's numbers
 
   async function loadData(force) {
-    if (st.data && !force) return st.data;
+    if (st.data && !force && Date.now() - st.fetchedAt < STALE_MS) return st.data;       // an old copy is fetched again
     if (st.loading) return st.loading;
     st.loading = (async () => {
       const res = await fetch(L().API + '/api/stats', { headers: { accept: 'application/json' } });
@@ -43,7 +45,7 @@
       };
       st.rows = S.enrich(data.statistics, st.lookups);
       st.seasons = S.buildSeasons(st.lookups.platforms);
-      st.data = data;
+      st.data = data; st.fetchedAt = Date.now();
       return data;
     })().finally(() => { st.loading = null; });
     return st.loading;
@@ -170,7 +172,7 @@
           `<tr><th scope="row">${esc(c)}</th>${rt.types.map(t => `<td class="num">${esc(rt.cell(c, t))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>` : '') + '</div>';
     }).join('')}</section>`;
 
-    const teams = ((st.data.teams && st.data.teams.items) || []).slice().sort((a, b) => Number(!!b.isOwner) - Number(!!a.isOwner));
+    const teams = teamList();
     out += `<section class="card"><h2>Teams</h2>${(st.data.problems || {}).teams ? hint('Teams did not load.') : !teams.length ? hint('You have not joined any teams yet.') : `<ul class="teams">${teams.map(t =>
       `<li><b>${esc(t.name || 'Unnamed team')}</b>${t.isOwner ? ' <span class="tag pb">Owner</span>' : ''}<div class="sub-line">${esc(t.slug || '')}</div></li>`).join('')}</ul>`}</section>`;
     return out;
@@ -241,7 +243,8 @@
     const cards = `<div class="tiles">${by.map(g => `<div class="tile"><span class="label"><span class="dot" style="background:${sessionColor(g.name)}"></span>${esc(g.name)}</span><b>${pct(g.cleanPct)}</b><small>clean laps</small><small>${n0(g.laps)} laps · ${S.fmtHours(g.hours)} · ${n0(g.events)} events</small></div>`).join('')}</div>`;
     const prac = by.find(g => g.name === 'Practice'), race = by.find(g => g.name === 'Race');
     const diff = prac && race ? prac.cleanPct - race.cleanPct : null;
-    const line = diff === null ? '' : `<p class="st-line">${diff > 0 ? `Your race laps are <b>${Math.round(diff)} points less clean</b> than your practice laps.` : `Your race laps are <b>${Math.round(-diff)} points cleaner</b> than your practice laps.`}</p>`;
+    const shown = diff === null ? 0 : Math.round(Math.abs(diff));
+    const line = diff === null ? '' : `<p class="st-line">${!shown ? 'Your race laps and practice laps are <b>about equally clean</b>.' : diff > 0 ? `Your race laps are <b>${shown} points less clean</b> than your practice laps.` : `Your race laps are <b>${shown} points cleaner</b> than your practice laps.`}</p>`;
     const monthly = S.monthlyCleanPct(rows);
     let trend = '';
     if (monthly.length) {
@@ -254,12 +257,21 @@
       ? hint('Not enough tracks with both practice and race laps (20+ of each) in this time range.')
       : hint('Tracks with 20+ practice laps and 20+ race laps. Gap = practice clean % minus race clean %.') + table([
         { label: 'Track', wrap: true, get: g => esc(g.track) }, { label: 'Practice', num: true, get: g => `${pct(g.practicePct)}<small> ${n0(g.practiceLaps)} laps</small>` },
-        { label: 'Race', num: true, get: g => `${pct(g.racePct)}<small> ${n0(g.raceLaps)} laps</small>` }, { label: 'Gap (pts)', num: true, get: g => (g.gap >= 0 ? '+' : '−') + Math.abs(Math.round(g.gap)) }], gap, 'Practice versus race by track')}</section>`;
+        { label: 'Race', num: true, get: g => `${pct(g.racePct)}<small> ${n0(g.raceLaps)} laps</small>` }, { label: 'Gap (pts)', num: true, get: g => signed(g.gap, n0) }], gap, 'Practice versus race by track')}</section>`;
     return bar + `<section class="card"><h2>Clean laps by session type</h2>${cards}${line}</section>` + trend + costs + sessionNote();
   }
 
   /* ---- team (needs the edit key) ----------------------------------------------------------------------------- */
-  const teamList = () => ((st.data.teams && st.data.teams.items) || []).slice().sort((a, b) => Number(!!b.isOwner) - Number(!!a.isOwner));
+  /** Teams you own first. */
+  function teamList() { return ((st.data.teams && st.data.teams.items) || []).slice().sort((a, b) => Number(!!b.isOwner) - Number(!!a.isOwner)); }
+
+  /** Starts loading the selected team when it has not been asked for yet and an edit key is stored; render() calls this before drawing. */
+  function ensureTeam() {
+    const teams = teamList();
+    if (!teams.some(t => t.id === st.tm.id)) st.tm.id = (teams[0] || {}).id || null;
+    const id = st.tm.id;
+    if (id && !st.teams[id] && L().store.get('ledger.editkey')) loadTeam(id);
+  }
 
   async function loadTeam(id) {
     const key = L().store.get('ledger.editkey');
@@ -285,13 +297,9 @@
   function teamPage() {
     const teams = teamList();
     if (!teams.length) return hint('You have not joined any teams yet.');
-    if (!teams.some(t => t.id === st.tm.id)) st.tm.id = teams[0].id;                    // teams you own come first
     const id = st.tm.id, name = (teams.find(t => t.id === id) || {}).name || 'this team';
     const picker = `<label class="flt">Team<select data-sf="tm.team">${teams.map(t => `<option value="${esc(t.id)}"${t.id === id ? ' selected' : ''}>${esc(t.name)}${t.isOwner ? ' (owner)' : ''}</option>`).join('')}</select></label>`;
-    let rec = st.teams[id];
-    if (!rec) {
-      if (L().store.get('ledger.editkey')) { loadTeam(id); rec = { state: 'loading' }; } else rec = { state: 'locked' };
-    }
+    const rec = st.teams[id] || { state: 'locked' };           // ensureTeam() has already started a load when there is a key
     const locked = `<section class="card"><h2>Team statistics are private</h2><p class="imp-note">They show what your teammates drove: days, tracks and laps for each driver, so they need your edit key.</p>${rec.message ? hint(esc(rec.message), 'imp-bad') : ''}<div class="sf-actions"><button type="button" class="btn" data-st-unlock>Unlock with edit key</button></div></section>`;
     if (rec.state === 'locked') return filterBar(picker) + locked;
     if (rec.state === 'loading') return filterBar(picker) + hint(`Loading statistics for ${esc(name)}…`, 'imp-hint st-load');
@@ -330,10 +338,13 @@
     try { await loadData(force); }
     catch (e) {
       if (my !== token) return;
-      app.innerHTML = shell(page, '<div class="empty"><strong>Statistics did not load</strong>Check your connection, then <button type="button" class="btn ghost sm" data-st-reload>try again</button>.</div>');
-      return;
+      if (!st.data || force) {                                // a failed refresh of an older copy just keeps showing that copy
+        app.innerHTML = shell(page, '<div class="empty"><strong>Statistics did not load</strong>Check your connection, then <button type="button" class="btn ghost sm" data-st-reload>try again</button>.</div>');
+        return;
+      }
     }
     if (my !== token || !location.hash.startsWith('#/stats')) return;
+    if (page === 'team') ensureTeam();
     const focus = document.activeElement && document.activeElement.dataset ? { sf: document.activeElement.dataset.sf, value: document.activeElement.value } : null;
     const names = st.data.problems && st.data.problems.lookups && page !== '' ? hint('Car and track names did not load, so some are shown by number.', 'imp-bad') : '';
     const empty = !st.rows.length && page !== '' && page !== 'team';

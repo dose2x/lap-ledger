@@ -69,6 +69,7 @@
         session: sessionLabel(r.sessionType), events: num(r.events), seconds: num(r.timeOnTrack), laps: num(r.lapsDriven), clean: num(r.cleanLapsDriven),
         carName: carNames.get(r.car) || `Car #${r.car}`,
         trackName: trackNames.get(r.track) || `Track #${r.track}`,
+        carClasses: [...new Set(classes.get(r.car) || [])].sort(),
         carClass: [...new Set(classes.get(r.car) || [])].sort().join(', ') || '—',
         season: null, week: null
       };
@@ -99,14 +100,15 @@
 
   /** Headline numbers for a (possibly filtered) set of rows. */
   function totals(rows) {
-    let laps = 0, clean = 0, seconds = 0, events = 0, last = null;
+    let laps = 0, clean = 0, seconds = 0, events = 0, first = null, last = null;
     const days = new Set(), tracks = new Set(), cars = new Set();
     for (const r of rows) {
       laps += r.laps; clean += r.clean; seconds += r.seconds; events += r.events;
       days.add(r.day); tracks.add(r.track); cars.add(r.car);
       if (last === null || r.day > last) last = r.day;
+      if (first === null || r.day < first) first = r.day;       // (no Math.min(...rows): thousands of arguments overflow the stack)
     }
-    return { laps, clean, cleanPct: laps ? (clean / laps) * 100 : 0, hours: seconds / 3600, events, days: days.size, tracks: tracks.size, cars: cars.size, first: rows.length ? Math.min(...rows.map(r => r.day)) : null, last };
+    return { laps, clean, cleanPct: laps ? (clean / laps) * 100 : 0, hours: seconds / 3600, events, days: days.size, tracks: tracks.size, cars: cars.size, first, last };
   }
 
   /** The n groups with the lowest clean % among those with at least minLaps laps. */
@@ -159,8 +161,7 @@
   /** Time ranges for the filters. `range`: 'all' | 'season' (latest season driven) | '30' | '90' | '365'. */
   function rangeFilter(rows, range, today = todayMs()) {
     if (range === 'season') {
-      let latest = null, day = -Infinity;
-      for (const r of rows) if (r.season && r.day > day) { day = r.day; latest = r.season; }
+      const latest = latestSeasonName(rows);
       return latest ? rows.filter(r => r.season === latest) : rows;
     }
     const days = { 30: 30, 90: 90, 365: 365 }[range];
@@ -182,7 +183,7 @@
   /** Rows split by class: a car in two classes counts toward each (the dashboard's "Car classes" view). */
   function explodeClasses(rows) {
     const out = [];
-    for (const r of rows) for (const c of r.carClass.split(', ')) out.push({ ...r, carClass: c });
+    for (const r of rows) for (const c of (r.carClasses && r.carClasses.length ? r.carClasses : [r.carClass])) out.push({ ...r, carClass: c });   // the array, so a class name with a comma stays whole
     return out;
   }
 
@@ -219,7 +220,8 @@
   /** Laps and clean laps for weeks 1..max of the rows' season, with zeros filled in. */
   function weeklyLaps(current) {
     if (!current.length) return [];
-    const max = Math.max(...current.map(r => r.week));
+    let max = 0;
+    for (const r of current) if (r.week > max) max = r.week;
     const out = Array.from({ length: max }, (_, i) => ({ week: i + 1, laps: 0, clean: 0 }));
     for (const r of current) { out[r.week - 1].laps += r.laps; out[r.week - 1].clean += r.clean; }
     return out;
