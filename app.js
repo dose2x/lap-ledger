@@ -463,9 +463,10 @@
       });
       if (ticket !== imp.reading) return;
       if (res.status === 401) { store.set('ledger.editkey', ''); return note('That edit key was wrong, so nothing was suggested.'); }
-      if (res.status === 429) return note(await lockoutText(res));
+      // SECURITY FIX (vibeguard #7): text from the server goes into innerHTML, so it is escaped.
+      if (res.status === 429) return note(esc(await lockoutText(res)));
       const out = await res.json().catch(() => ({}));
-      if (!res.ok) return note((out.error || 'Your driving history could not be checked.') + ' Pick the car and track yourself.');
+      if (!res.ok) return note(esc(out.error || 'Your driving history could not be checked.') + ' Pick the car and track yourself.');
       store.set('ledger.editkey', key);
       showCandidates((out.candidates || []).filter(c => imp.byId.cars.has(c.car) && imp.byId.tracks.has(c.track)), ticket);
     } catch (e) { note('Your driving history could not be checked. Pick the car and track yourself.'); }

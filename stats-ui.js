@@ -167,7 +167,7 @@
     out += `<section class="card"><h2>Linked accounts</h2>${(st.data.problems || {}).accounts ? hint('Linked accounts did not load.') : !accounts.length ? hint('No linked accounts (for example iRacing) found.') : accounts.map(a => {
       const platform = typeof a.platform === 'object' && a.platform ? a.platform.name : String(a.platform || '');
       const rt = S.ratingsTable(a.ratings);
-      return `<div class="acct"><b>${esc(a.name || 'Unknown')}</b><div class="sub-line">${esc(platform.toLowerCase() === 'iracing' ? 'iRacing' : platform.replace(/^./, c => c.toUpperCase()) || 'Unknown platform')} · ID ${esc(a.id ?? '?')}</div>`
+      return `<div class="acct"><b>${esc(a.name || 'Unknown')}</b><div class="sub-line">${esc(platform.toLowerCase() === 'iracing' ? 'iRacing' : platform.replace(/^./, c => c.toUpperCase()) || 'Unknown platform')}</div>`
         + (rt.categories.length ? `<div class="st-wrap"><table class="st-table rt"><thead><tr><th scope="col">Category</th>${rt.types.map(t => `<th scope="col" class="num">${esc(t)}</th>`).join('')}</tr></thead><tbody>${rt.categories.map(c =>
           `<tr><th scope="row">${esc(c)}</th>${rt.types.map(t => `<td class="num">${esc(rt.cell(c, t))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>` : '') + '</div>';
     }).join('')}</section>`;

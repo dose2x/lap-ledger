@@ -2,19 +2,12 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://lap-ledger-api.ohndtomatometer.workers.dev; object-src 'none'; base-uri 'none'; form-action 'self'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Lap Ledger</title>
 <meta name="description" content="Look up your lap times and setups for any iRacing car and track combo.">
 <meta name="theme-color" content="#111A24">
-<script>
-  (function () {
-    try {
-      var t = localStorage.getItem('ledger.theme');
-      if (t !== 'light' && t !== 'dark') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-      document.documentElement.dataset.theme = t;
-    } catch (e) { document.documentElement.dataset.theme = 'light'; }
-  })();
-</script>
+<script src="theme-init.js"></script>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">

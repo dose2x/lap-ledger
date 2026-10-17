@@ -1,5 +1,5 @@
-const CACHE = 'lap-ledger-v3';
-const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'stats.js', 'stats-ui.js', 'sample.js', 'config.js', 'icon.svg', 'manifest.webmanifest'];
+const CACHE = 'lap-ledger-v4';
+const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'stats.js', 'stats-ui.js', 'sample.js', 'config.js', 'theme-init.js', 'icon.svg', 'manifest.webmanifest'];
 self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())));
 self.addEventListener('activate', e => e.waitUntil(
   caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())));
